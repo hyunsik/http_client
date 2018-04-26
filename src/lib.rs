@@ -156,6 +156,20 @@ impl HttpClient {
         Ok(self.handle_response(req))
     }
 
+    pub fn request_raw<P, R>(
+        &mut self,
+        method: Method,
+        uri: &hyper::Uri,
+        value: P,
+    ) -> HResult<FutureResponse<R>>
+        where
+            P: AsRef<str>,
+            R: DeserializeOwned + 'static,
+    {
+        let req = self.build_request_raw(method, uri, value)?;
+        Ok(self.handle_response(req))
+    }
+
     pub fn build_request<P>(
         &mut self,
         method: Method,
@@ -170,6 +184,23 @@ impl HttpClient {
         req.headers_mut().set(ContentType::json());
         req.headers_mut().set(ContentLength(json_str.len() as u64));
         req.set_body(json_str);
+        Ok(req)
+    }
+
+    pub fn build_request_raw<P>(
+        &mut self,
+        method: Method,
+        uri: &hyper::Uri,
+        value: P,
+    ) -> HResult<Request>
+        where
+            P: AsRef<str>,
+    {
+        let body = value.as_ref();
+        let mut req = Request::new(method, uri.clone());
+        req.headers_mut().set(ContentType::json());
+        req.headers_mut().set(ContentLength(body.len() as u64));
+        req.set_body(body.to_string());
         Ok(req)
     }
 
