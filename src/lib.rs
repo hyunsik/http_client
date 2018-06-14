@@ -9,9 +9,7 @@ extern crate tokio;
 
 pub use error::*;
 use futures::{Future, Stream};
-pub use http::StatusCode;
-pub use http::Uri;
-use http::{Method, Request, Response};
+use http::Request;
 use hyper::client::HttpConnector;
 use hyper::header::CONTENT_TYPE;
 use hyper::Client;
@@ -20,6 +18,9 @@ use std::error::Error;
 
 mod error;
 mod mime;
+
+pub use http::{Method, StatusCode};
+pub use http::Uri;
 pub use mime::*;
 
 pub const DEFAULT_THREAD_NUM: usize = 2;
@@ -28,7 +29,7 @@ pub struct HttpClient {
     client: Client<HttpConnector>,
 }
 
-pub struct HResponse<T>
+pub struct Response<T>
 where
     T: MimeType,
 {
@@ -36,12 +37,12 @@ where
     pub value: T,
 }
 
-impl<T> HResponse<T>
+impl<T> Response<T>
 where
     T: MimeType,
 {
     pub fn new(status: StatusCode, value: T) -> Self {
-        HResponse { status, value }
+        Response { status, value }
     }
 
     pub fn status(&self) -> StatusCode {
@@ -63,7 +64,7 @@ impl HttpClient {
     pub fn get<R: MimeType>(
         &self,
         uri: Uri,
-    ) -> impl Future<Item = HResponse<R>, Error = HError> + 'static
+    ) -> impl Future<Item = Response<R>, Error = HError> + 'static
     where
         R: MimeType + 'static,
     {
@@ -76,7 +77,7 @@ impl HttpClient {
         &self,
         uri: Uri,
         value: S,
-    ) -> Result<impl Future<Item = HResponse<R>, Error = HError> + 'static, HError>
+    ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
         S: MimeType + 'static,
         R: MimeType + 'static,
@@ -88,7 +89,7 @@ impl HttpClient {
         &self,
         uri: Uri,
         value: S,
-    ) -> Result<impl Future<Item = HResponse<R>, Error = HError> + 'static, HError>
+    ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
         S: MimeType + 'static,
         R: MimeType + 'static,
@@ -100,7 +101,7 @@ impl HttpClient {
         &self,
         uri: Uri,
         value: S,
-    ) -> Result<impl Future<Item = HResponse<R>, Error = HError> + 'static, HError>
+    ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
         S: MimeType + 'static,
         R: MimeType + 'static,
@@ -113,14 +114,14 @@ impl HttpClient {
         method: Method,
         uri: Uri,
         value: S,
-    ) -> Result<impl Future<Item = HResponse<R>, Error = HError> + 'static, HError>
+    ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
         S: MimeType + 'static,
         R: MimeType + 'static,
     {
         let mut builder = Request::builder();
         let req = match builder
-            .uri(uri)
+            .uri(uri.clone())
             .method(method)
             .header(CONTENT_TYPE, S::mime_type())
             .body(hyper::Body::from(value.to_bytes()?))
@@ -134,15 +135,15 @@ impl HttpClient {
     fn handle_response<R>(
         &self,
         req: Request<hyper::Body>,
-    ) -> impl Future<Item = HResponse<R>, Error = HError> + 'static
+    ) -> impl Future<Item = Response<R>, Error = HError> + 'static
     where
         R: MimeType + 'static,
     {
         self.client
             .request(req)
             .then(
-                |result: Result<Response<hyper::Body>, hyper::Error>| -> Result<
-                    Box<Future<Item = HResponse<R>, Error = HError> + 'static + Send>,
+                |result: Result<http::Response<hyper::Body>, hyper::Error>| -> Result<
+                    Box<Future<Item = Response<R>, Error = HError> + 'static + Send>,
                     HError,
                 > {
                     match result {
@@ -159,7 +160,7 @@ impl HttpClient {
                                     })
                                     .and_then(move |body| {
                                         R::from_bytes(status_code, body)
-                                            .map(|payload| HResponse::new(status_code, payload))
+                                            .map(|payload| Response::new(status_code, payload))
                                     }),
                             );
                             Ok(future)
