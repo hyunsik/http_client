@@ -17,11 +17,11 @@ use std::convert::From;
 use std::error::Error;
 
 mod error;
-mod mime;
+pub mod mime;
 
+use mime::MimeType;
 pub use http::{Method, StatusCode};
 pub use http::Uri;
-pub use mime::*;
 
 pub const DEFAULT_THREAD_NUM: usize = 2;
 
