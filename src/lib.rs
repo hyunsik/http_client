@@ -10,18 +10,18 @@ extern crate tokio;
 pub use error::*;
 use futures::{Future, Stream};
 use http::Request;
+use hyper::Client;
 use hyper::client::HttpConnector;
 use hyper::header::CONTENT_TYPE;
-use hyper::Client;
 use std::convert::From;
 use std::error::Error;
 
 mod error;
 pub mod mime;
 
-use mime::MimeType;
-pub use http::{Method, StatusCode};
 pub use http::Uri;
+pub use http::{Method, StatusCode};
+use mime::MimeType;
 
 pub const DEFAULT_THREAD_NUM: usize = 2;
 
@@ -51,6 +51,10 @@ where
 
     pub fn into_inner(self) -> T {
         self.value
+    }
+
+    pub fn inner(&self) -> &T {
+        &self.value
     }
 }
 

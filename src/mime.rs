@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use super::StatusCode;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -32,6 +33,14 @@ impl<'a, V: Send> MimeType for Json<V>
             Ok(v) => Ok(Json(v)),
             Err(e) => Err(HError::InvalidDataFormat(format!("{}", e))),
         }
+    }
+}
+
+impl<V: Send> Deref for Json<V> {
+    type Target = V;
+
+    fn deref(&self) -> &V {
+        &self.0
     }
 }
 
