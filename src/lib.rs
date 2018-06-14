@@ -1,27 +1,28 @@
 //! Asynchronous Http Client for JSON body
 
 extern crate futures;
+extern crate http;
 extern crate hyper;
 extern crate serde;
+#[macro_use]
+extern crate serde_derive;
 extern crate serde_json;
-extern crate tokio_core;
+extern crate tokio;
 
 use std::convert::From;
 use std::error::Error;
 use std::fmt;
 
-use futures::sync::oneshot;
-use futures::{Async, Future, Poll, Stream};
+use futures::{Future, Stream};
+use http::{Method, Request, Response};
 use hyper::client::HttpConnector;
+use hyper::header::CONTENT_TYPE;
 use hyper::Client;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio_core::reactor::Handle;
+use serde::Serialize;
 
-pub use hyper::Uri;
-pub use hyper::client::Request;
-pub use hyper::header::{ContentLength, ContentType, Header};
-pub use hyper::{Method, StatusCode};
+pub use http::StatusCode;
+pub use http::Uri;
 
 pub enum HError {
     CanceledSend,
@@ -69,8 +70,14 @@ impl From<serde_json::Error> for HError {
     }
 }
 
+impl From<http::Error> for HError {
+    fn from(e: http::Error) -> Self {
+        HError::InvalidHttpResponse(e.description().to_owned())
+    }
+}
+
 pub type HResult<T> = Result<T, HError>;
-pub type RFuture<T> = futures::Future<Item = T, Error = HError>;
+pub type RFuture<T> = futures::Future<Item = T, Error = HError> + Send;
 
 pub static EMPTY: () = ();
 
@@ -78,7 +85,6 @@ pub const DEFAULT_THREAD_NUM: usize = 2;
 
 pub struct HttpClient {
     client: Client<HttpConnector>,
-    handle: Handle,
 }
 
 #[derive(Debug, PartialEq)]
@@ -101,122 +107,109 @@ pub enum Status<T: DeserializeOwned + 'static> {
     Unregistered(u16),
 }
 
-pub struct FutureResponse<T: DeserializeOwned + 'static>(
-    oneshot::Receiver<Result<Status<T>, HError>>,
-);
-
-impl<T: DeserializeOwned + 'static> Future for FutureResponse<T> {
-    type Item = Status<T>;
-    type Error = HError;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.0.poll() {
-            Ok(Async::Ready(Ok(t))) => Ok(t.into()),
-            Ok(Async::Ready(Err(e))) => Err(e),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(_) => Err(HError::CanceledSend),
-        }
-    }
-}
-
 impl HttpClient {
-    pub fn new(handle: &Handle) -> HttpClient {
-        let client = Client::configure()
-            .connector(HttpConnector::new(DEFAULT_THREAD_NUM, handle))
-            .keep_alive(true)
-            .build(handle);
-
+    pub fn new() -> HttpClient {
         HttpClient {
-            client: client,
-            handle: handle.clone(),
+            client: Client::new(),
         }
     }
 
-    pub fn get<R>(&mut self, uri: &hyper::Uri) -> FutureResponse<R>
-        where
-            R: DeserializeOwned + 'static,
+    pub fn get<R>(&self, uri: &Uri) -> impl Future<Item = Status<R>, Error = HError> + 'static
+    where
+        R: DeserializeOwned + 'static + Send
     {
-        let req = self.build_request(Method::Get, uri, &EMPTY)
+        let req = self.build_request(Method::GET, uri, &EMPTY)
             .ok()
             .expect("HttpClient::build_request failed..");
         self.handle_response(req)
     }
 
     pub fn request<P, R>(
-        &mut self,
+        &self,
         method: Method,
-        uri: &hyper::Uri,
+        uri: &Uri,
         value: &P,
-    ) -> HResult<FutureResponse<R>>
-        where
-            P: Serialize,
-            R: DeserializeOwned + 'static,
+    ) -> HResult<impl Future<Item = Status<R>, Error = HError>>
+    where
+        P: Serialize,
+        R: DeserializeOwned + 'static + Send
     {
         let req = self.build_request(method, uri, value)?;
         Ok(self.handle_response(req))
     }
 
     pub fn request_raw<P, R>(
-        &mut self,
+        &self,
         method: Method,
-        uri: &hyper::Uri,
+        uri: &Uri,
         value: P,
-    ) -> HResult<FutureResponse<R>>
-        where
-            P: AsRef<str>,
-            R: DeserializeOwned + 'static,
+    ) -> HResult<impl Future<Item = Status<R>, Error = HError>>
+    where
+        P: AsRef<[u8]>,
+        R: DeserializeOwned + 'static + Send
     {
         let req = self.build_request_raw(method, uri, value)?;
         Ok(self.handle_response(req))
     }
 
     pub fn build_request<P>(
-        &mut self,
+        &self,
         method: Method,
-        uri: &hyper::Uri,
+        uri: &Uri,
         value: &P,
-    ) -> HResult<Request>
-        where
-            P: Serialize,
+    ) -> HResult<Request<hyper::Body>>
+    where
+        P: Serialize,
     {
-        let json_str = serde_json::to_string(value)?;
-        let mut req = Request::new(method, uri.clone());
-        req.headers_mut().set(ContentType::json());
-        req.headers_mut().set(ContentLength(json_str.len() as u64));
-        req.set_body(json_str);
-        Ok(req)
+        let body = serde_json::to_vec(value)?;
+        let mut req = Request::builder();
+        match req.uri(uri.clone())
+            .method(method)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.into())
+        {
+            Ok(req) => Ok(req),
+            Err(e) => Err(HError::InvalidHttpRequest(format!("{}", e))),
+        }
     }
 
     pub fn build_request_raw<P>(
-        &mut self,
+        &self,
         method: Method,
-        uri: &hyper::Uri,
+        uri: &Uri,
         value: P,
-    ) -> HResult<Request>
-        where
-            P: AsRef<str>,
+    ) -> HResult<Request<hyper::Body>>
+    where
+        P: AsRef<[u8]>,
     {
         let body = value.as_ref();
-        let mut req = Request::new(method, uri.clone());
-        req.headers_mut().set(ContentType::json());
-        req.headers_mut().set(ContentLength(body.len() as u64));
-        req.set_body(body.to_string());
-        Ok(req)
+        let mut req = Request::builder();
+        match req.uri(uri.clone())
+            .method(method)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_owned().into())
+        {
+            Ok(req) => Ok(req),
+            Err(e) => Err(HError::InvalidHttpRequest(format!("{}", e))),
+        }
     }
 
-    fn handle_response<R>(&mut self, req: Request) -> FutureResponse<R>
-        where
-            R: DeserializeOwned + 'static,
+    fn handle_response<R>(
+        &self,
+        req: Request<hyper::Body>,
+    ) -> impl Future<Item = Status<R>, Error = HError> + 'static
+    where
+        R: Sized + DeserializeOwned + 'static + Send
     {
-        let (tx, rx) = oneshot::channel::<HResult<Status<R>>>();
-        let task = self.client
+        self.client
             .request(req)
-            .then(|result| -> HResult<Box<RFuture<Status<R>>>> {
+            .then(|result: Result<Response<hyper::Body>, hyper::Error>|
+                    -> HResult<Box<RFuture<Status<R>>>> {
                 match result {
                     Ok(r) => {
                         let future: Box<RFuture<Status<R>>> = match r.status() {
-                            StatusCode::Ok => Box::new(
-                                r.body()
+                            StatusCode::OK => Box::new(
+                                r.into_body()
                                     .map_err(|e| {
                                         HError::InvalidHttpResponse(e.description().to_owned())
                                     })
@@ -240,25 +233,93 @@ impl HttpClient {
                 }
             })
             .and_then(|c| c)
-            .then(|res| -> Result<(), ()> {
-                let _ = tx.send(res);
-                Ok(())
-            });
-
-        let _ = self.handle.spawn(task);
-        FutureResponse(rx)
     }
 }
 
 impl<T: DeserializeOwned + 'static> From<StatusCode> for Status<T> {
     fn from(s: StatusCode) -> Self {
         match s {
-            StatusCode::Created => Status::Created,
-            StatusCode::Accepted => Status::Accepted,
-            StatusCode::NotFound => Status::NotFound,
-            StatusCode::InternalServerError => Status::InternalServerError,
-            StatusCode::NotImplemented => Status::NotImplemented,
+            StatusCode::CREATED => Status::Created,
+            StatusCode::ACCEPTED => Status::Accepted,
+            StatusCode::NOT_FOUND => Status::NotFound,
+            StatusCode::INTERNAL_SERVER_ERROR => Status::InternalServerError,
+            StatusCode::NOT_IMPLEMENTED => Status::NotImplemented,
             _ => Status::Unregistered(s.as_u16()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub enum RunnerStatus {
+        New,
+        InitFailed(String),
+        Idle,
+        Running,
+        Unhealthy(String),
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct RunnerState {
+        start_time: u64,
+        status: RunnerStatus,
+        succeeded_tasks: u64,
+        failed_tasks: u64,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct TaskRunReq {
+        pub id: String,
+        pub sandbox: String,
+        pub input_fname: String,
+        pub run_script: String,
+        pub run_expr: String,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ErrorResponse {
+        code: String,
+        message: String,
+    }
+
+    #[test]
+    fn test() {
+        use std::thread;
+        let uri: Uri = "http://127.0.0.1:58921/tasks".parse().unwrap();
+        let client = HttpClient::new();
+        let (tx, rx) = oneshot::channel();
+        use futures::sync::oneshot;
+
+        use serde_json;
+        let req = TaskRunReq {
+            id: "task_123".to_string(),
+            sandbox: "/tmp/rdist-test".to_string(),
+            input_fname: "test.csv".to_string(),
+            run_script: "run.R".to_string(),
+            run_expr: "run()".to_string(),
+        };
+
+        thread::spawn(move || {
+            let task = client.request(Method::POST, &uri, &req).unwrap()
+                .then(move |r: Result<Status<()>, HError>| -> Result<(), ()> {
+//                    match r {
+//                        Ok(Status::Ok(r)) => {
+//                            //let r: RunnerState = r;
+//                            //tx.send(r).unwrap();
+//                        }
+//                        Ok(_) => panic!("{}"),
+//                        Err(e) => eprintln!("{:?}", e),
+//                    };
+                    tx.send(());
+                    Ok(())
+                });
+            tokio::run(task);
+        });
+
+        let state = rx.wait().unwrap();
+        eprintln!("{:?}", state);
     }
 }
