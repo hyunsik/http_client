@@ -3,11 +3,13 @@
 extern crate futures;
 extern crate http;
 extern crate hyper;
+#[macro_use]
+extern crate log;
+pub extern crate mime;
 extern crate serde;
 extern crate serde_json;
 extern crate tokio;
 
-pub use error::*;
 use futures::{Future, Stream};
 use http::Request;
 use hyper::Client;
@@ -17,11 +19,12 @@ use std::convert::From;
 use std::error::Error;
 
 mod error;
-pub mod mime;
+pub mod mime_serde;
 
+pub use error::*;
 pub use http::Uri;
 pub use http::{Method, StatusCode};
-use mime::MimeType;
+pub use mime_serde::*;
 
 pub const DEFAULT_THREAD_NUM: usize = 2;
 
@@ -31,7 +34,7 @@ pub struct HttpClient {
 
 pub struct Response<T>
 where
-    T: MimeType,
+    T: MimeDeserialize,
 {
     pub status: http::StatusCode,
     pub value: T,
@@ -39,7 +42,7 @@ where
 
 impl<T> Response<T>
 where
-    T: MimeType,
+    T: MimeDeserialize,
 {
     pub fn new(status: StatusCode, value: T) -> Self {
         Response { status, value }
@@ -65,13 +68,14 @@ impl HttpClient {
         }
     }
 
-    pub fn get<R: MimeType>(
+    pub fn get<R: MimeDeserialize>(
         &self,
         uri: Uri,
     ) -> impl Future<Item = Response<R>, Error = HError> + 'static
     where
-        R: MimeType + 'static,
+        R: MimeDeserialize + 'static + Send,
     {
+        debug!("GET {} (*/*)", &uri);
         let mut req = Request::new(hyper::Body::default());
         *req.uri_mut() = uri;
         self.handle_response(req)
@@ -83,8 +87,8 @@ impl HttpClient {
         value: S,
     ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
-        S: MimeType + 'static,
-        R: MimeType + 'static,
+        S: MimeSerialize + 'static,
+        R: MimeDeserialize + 'static + Send,
     {
         self.request(Method::POST, uri, value)
     }
@@ -95,8 +99,8 @@ impl HttpClient {
         value: S,
     ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
-        S: MimeType + 'static,
-        R: MimeType + 'static,
+        S: MimeSerialize + 'static,
+        R: MimeDeserialize + 'static + Send,
     {
         self.request(Method::PUT, uri, value)
     }
@@ -107,8 +111,8 @@ impl HttpClient {
         value: S,
     ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
-        S: MimeType + 'static,
-        R: MimeType + 'static,
+        S: MimeSerialize + 'static,
+        R: MimeDeserialize + 'static + Send,
     {
         self.request(Method::DELETE, uri, value)
     }
@@ -120,9 +124,10 @@ impl HttpClient {
         value: S,
     ) -> Result<impl Future<Item = Response<R>, Error = HError> + 'static, HError>
     where
-        S: MimeType + 'static,
-        R: MimeType + 'static,
+        S: MimeSerialize + 'static,
+        R: MimeDeserialize + 'static + Send,
     {
+        debug!("{} {} ({})", &method, &uri, S::mime_type());
         let mut builder = Request::builder();
         let req = match builder
             .uri(uri.clone())
@@ -141,7 +146,7 @@ impl HttpClient {
         req: Request<hyper::Body>,
     ) -> impl Future<Item = Response<R>, Error = HError> + 'static
     where
-        R: MimeType + 'static,
+        R: MimeDeserialize + 'static + Send,
     {
         self.client
             .request(req)

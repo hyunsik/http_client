@@ -1,6 +1,6 @@
+use futures;
 use std::error::Error;
 use std::fmt;
-use futures;
 
 pub type HResult<T> = Result<T, HError>;
 pub type RFuture<T> = futures::Future<Item = T, Error = HError> + Send;
@@ -24,7 +24,7 @@ impl Error for HError {
 
     fn cause(&self) -> Option<&Error> {
         match *self {
-            _ => None
+            _ => None,
         }
     }
 }
