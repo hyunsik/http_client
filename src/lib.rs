@@ -14,7 +14,7 @@ use futures::{Future, Stream};
 use http::Request;
 use hyper::Client;
 use hyper::client::HttpConnector;
-use hyper::header::CONTENT_TYPE;
+use hyper::header::{ACCEPT, CONTENT_TYPE};
 use std::convert::From;
 use std::error::Error;
 
@@ -68,6 +68,7 @@ impl HttpClient {
         }
     }
 
+    #[inline]
     pub fn get<R: ResponseBody>(
         &self,
         uri: Uri,
@@ -75,17 +76,10 @@ impl HttpClient {
     where
         R: ResponseBody + 'static + Send,
     {
-        debug!("GET {} ({})", &uri, "*/*");
-        let mut builder = Request::builder();
-        let req = builder
-            .uri(uri.clone())
-            .method(Method::GET)
-            .header(CONTENT_TYPE, "text/plain")
-            .body(hyper::Body::default())
-            .expect("http::Builder::body() failed");
-        self.handle_response(req)
+        self.request(Method::GET, uri, ()).expect("HttpClient::request failed")
     }
 
+    #[inline]
     pub fn post<S, R>(
         &self,
         uri: Uri,
@@ -98,6 +92,7 @@ impl HttpClient {
         self.request(Method::POST, uri, value)
     }
 
+    #[inline]
     pub fn put<S, R>(
         &self,
         uri: Uri,
@@ -110,6 +105,7 @@ impl HttpClient {
         self.request(Method::PUT, uri, value)
     }
 
+    #[inline]
     pub fn delete<S, R>(
         &self,
         uri: Uri,
@@ -138,6 +134,7 @@ impl HttpClient {
             .uri(uri.clone())
             .method(method)
             .header(CONTENT_TYPE, S::MIME.as_ref())
+            .header(ACCEPT, R::ACCEPT_TYPES)
             .body(hyper::Body::from(value.to_bytes()?))
         {
             Ok(req) => req,

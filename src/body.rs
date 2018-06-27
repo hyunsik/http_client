@@ -13,7 +13,7 @@ pub trait RequestBody {
 }
 
 pub trait ResponseBody: Sized {
-    fn accept_types() -> &'static str;
+    const ACCEPT_TYPES: &'static str;
 
     fn from_bytes(status: StatusCode, body: Vec<u8>) -> Result<Self, HError>;
 }
@@ -27,9 +27,7 @@ impl RequestBody for () {
 }
 
 impl ResponseBody for () {
-    fn accept_types() -> &'static str {
-        "*/*"
-    }
+    const ACCEPT_TYPES: &'static str = "*/*";
 
     fn from_bytes(_: StatusCode, _: Vec<u8>) -> Result<Self, HError> {
         Ok(())
@@ -73,9 +71,7 @@ where
 }
 
 impl<V: DeserializeOwned> ResponseBody for Json<V> {
-    fn accept_types() -> &'static str {
-        "application/json"
-    }
+    const ACCEPT_TYPES: &'static str = "application/json";
 
     fn from_bytes(_: StatusCode, body: Vec<u8>) -> Result<Self, HError> {
         Ok(Json(decode_json(&body)?))
@@ -107,9 +103,7 @@ impl RequestBody for TextPlain {
 }
 
 impl ResponseBody for TextPlain {
-    fn accept_types() -> &'static str {
-        "text/plain"
-    }
+    const ACCEPT_TYPES: &'static str = "text/plain";
 
     fn from_bytes(_: StatusCode, body: Vec<u8>) -> Result<Self, HError> {
         match String::from_utf8(body) {
